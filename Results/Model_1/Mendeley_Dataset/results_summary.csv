@@ -1,2 +1,0 @@
-Accuracy,Precision,Recall,F1,MCC,Balanced Accuracy,Training Time (sec),Parameter Count,Best Validation Accuracy,Batch Size,Mixed Precision,Device,timestamp,dataset,batch_size,device,amp_enabled,seed
-0.48863636363636365,0.5040143229773851,0.46046963583997835,0.45212199736142944,0.37646676254839606,0.46046963583997835,1374.866693019867,102913479,0.49188311688311687,32,True,cuda,2026-05-31T10:12:18.145023,Mendeley_Dataset,32,cuda,True,2912
