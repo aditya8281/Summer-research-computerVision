@@ -1,0 +1,20 @@
+[project]
+name = "cnn-transformer-hybrid-model-comparison"
+version = "0.1.0"
+description = "CNN Transformer Hybrid Model Comparison"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "torchinfo",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "scikit-learn",
+    "seaborn",
+    "tqdm",
+    "jupyter",
+]
