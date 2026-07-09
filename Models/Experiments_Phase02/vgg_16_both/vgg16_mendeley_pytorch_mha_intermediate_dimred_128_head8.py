@@ -165,30 +165,104 @@ val_dataset = MendeleyDataset(val_df, class_to_idx, transform=val_transforms)
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
 
+
+# 1. Define a wrapper module that applies Multi-Head Attention with Bottleneck to VGG16
+class MidBlockMHA_VGG16(nn.Module):
+    def __init__(self, base_model, num_classes, num_heads=8, reduction_factor=4):
+        super(MidBlockMHA_VGG16, self).__init__()
+        
+        # Determine if base_model uses Batch Normalization to set the correct layer index split point
+        # For standard vgg16, layer 23 is Conv4_3 and layer 24 is MaxPool4 -> Split at [:24] and [24:]
+        # For vgg16_bn, layer 33 is Conv4_3 and layer 34 is MaxPool4 -> Split at [:34] and [34:]
+        is_bn = isinstance(base_model.features[1], nn.BatchNorm2d)
+        split_idx = 34 if is_bn else 24
+        
+        # 1. Split the flat VGG features container right after MaxPool 4
+        # For a 224x224 input, this stage outputs a shape of [B, 512, 14, 14]
+        self.stage1 = base_model.features[:split_idx] 
+        
+        mid_features = 512 
+        
+        # Ensure the reduced embedding dimension is strictly divisible by num_heads
+        raw_reduced = mid_features // reduction_factor # 512 // 4 = 128
+        self.reduced_dim = (raw_reduced // num_heads) * num_heads
+        if self.reduced_dim == 0:
+            self.reduced_dim = num_heads
+            
+        # 2. Bottleneck MHA Components
+        self.project_down = nn.Conv2d(mid_features, self.reduced_dim, kernel_size=1)
+        self.mha = nn.MultiheadAttention(embed_dim=self.reduced_dim, num_heads=num_heads)
+        self.project_up = nn.Conv2d(self.reduced_dim, mid_features, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1)) # Start training as standard VGG16
+        
+        # 3. Remaining Backbone stage (Conv5 block + final MaxPool 5 down to 7x7)
+        self.stage2 = base_model.features[split_idx:]
+        
+        # 4. Standard VGG Avg Pooling & Classifier Structure
+        self.pool = base_model.avgpool
+        
+        # Reconstruct the original VGG linear classification block
+        self.classifier = nn.Sequential(
+            base_model.classifier[0],  # Linear(512 * 7 * 7, 4096)
+            base_model.classifier[1],  # ReLU
+            base_model.classifier[2],  # Dropout
+            base_model.classifier[3],  # Linear(4096, 4096)
+            base_model.classifier[4],  # ReLU
+            base_model.classifier[5],  # Dropout
+            nn.Linear(4096, num_classes) # Adjusted target leaf disease head
+        )
+
+    def forward(self, x):
+        # Forward through first half of network (up to MaxPool 4): [B, 512, 14, 14]
+        identity = self.stage1(x) 
+        
+        # Compress channels for attention
+        x_reduced = self.project_down(identity) 
+        
+        # Reshape for MHA: (B, C_red, H, W) -> (H*W, B, C_red)
+        B, C_red, H, W = x_reduced.shape
+        x_reshaped = x_reduced.view(B, C_red, H * W).permute(2, 0, 1)
+        
+        # Self-Attention
+        attn_output, _ = self.mha(x_reshaped, x_reshaped, x_reshaped)
+        
+        # Reshape back to CNN format
+        x_attn = attn_output.permute(1, 2, 0).view(B, C_red, H, W)
+        
+        # Expand back and apply residual connection scaled by gamma
+        x_expanded = self.project_up(x_attn)
+        mid_features = identity + self.gamma * x_expanded
+        
+        # Forward through remaining layers (Conv5 block + MaxPool5): Outputs [B, 512, 7, 7]
+        final_features = self.stage2(mid_features) 
+        
+        # Global Pooling, flattening, and Dense Classification
+        pooled = self.pool(final_features)
+        flat = torch.flatten(pooled, 1)
+        out = self.classifier(flat)
+        
+        return out
+
+
 # ==========================================
 # 5. MODEL ARCHITECTURE (DenseNet169)
 # ==========================================
 # Fetch weights cleanly in modern torchvision
 # densenet_weights = models.DenseNet169_Weights.IMAGENET1K_V1#models.DenseNet169_Weights.DEFAULT
+base_model = models.vgg16(weights='IMAGENET1K_V1')#weights=densenet_weights)
+
+# Replace the original classification head with your custom class size
+# num_features = base_model.fc.in_features
+# base_model.classifier = nn.Linear(num_features, NUM_CLASSES)
+model = MidBlockMHA_VGG16(base_model, NUM_CLASSES, num_heads=8)
+model = model.to(device)
 
 def count_parameters(model):
     # Sum up the elements of each parameter tensor if it requires gradients
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-base_model = models.vgg16(pretrained=False)#weights=densenet_weights)
-# import pdb
-# pdb.set_trace()
-# total_trainable_params_base = count_parameters(base_model)
-# Replace the original classification head with your custom class size
-# num_features = base_model.fc.in_features
-num_features = base_model.classifier[6].in_features
-# base_model.fc = nn.Linear(num_features, NUM_CLASSES)
-base_model.classifier[6] = nn.Linear(num_features, NUM_CLASSES)
-
-model = base_model.to(device)
-
-
 # Calculate the parameters
+# total_trainable_params_base = count_parameters(base_model)
 total_trainable_params = count_parameters(model)
 
 print("=" * 40)
@@ -218,7 +292,6 @@ def evaluate_and_print_metrics(model, val_loader, device):
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            # outputs = outputs.logits
             _, preds = torch.max(outputs, 1)
             
             all_preds.extend(preds.cpu().numpy())
@@ -288,7 +361,6 @@ for epoch in tqdm(range(1, EPOCHS + 1)):
         
         optimizer.zero_grad()
         outputs = model(inputs)
-        # outputs = outputs.logits
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -306,12 +378,11 @@ for epoch in tqdm(range(1, EPOCHS + 1)):
     running_val_loss = 0.0
     correct_val = 0
     total_val = 0
-        
+    
     with torch.no_grad():
         for inputs, targets in val_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = model(inputs)
-            # outputs = outputs.logits
             loss = criterion(outputs, targets)
             
             running_val_loss += loss.item() * inputs.size(0)
@@ -331,7 +402,7 @@ for epoch in tqdm(range(1, EPOCHS + 1)):
     scheduler.step(epoch_val_loss)
     
     # Print progress
-    print(f"Epoch {epoch}/{EPOCHS} - loss: {epoch_train_loss:.4f} - val_loss: {epoch_val_loss:.4f} - val_accuracy: {epoch_val_acc:.4f} - best: {best_val_acc:.4f} ep {best_val_ep} cnt {early_stop_counter}")
+    print(f"Epoch {epoch}/{EPOCHS} - loss: {epoch_train_loss:.4f} - val_loss: {epoch_val_loss:.4f} - val_accuracy: {epoch_val_acc:.4f} - best: {best_val_acc:.4f} ep {best_val_ep} {early_stop_counter}")
     evaluate_and_print_metrics(model, val_loader, device)
     # Log to CSV
     log_history.append({
@@ -352,5 +423,5 @@ for epoch in tqdm(range(1, EPOCHS + 1)):
         if early_stop_counter >= early_stop_patience:
             print(f"Early stopping triggered at epoch {epoch}. Restoring best weights.")
             # Load best weights back to model
-            model.load_state_dict(torch.load(os.path.join(RESULTS_DIR, "best.pth")))
+            # model.load_state_dict(torch.load(os.path.join(RESULTS_DIR, "best.pth")))
             break
