@@ -1,0 +1,8 @@
+Model,Framework,Pretrained,Trainable_Params,Training_Epochs,Overall_Accuracy_Pct,Average_Precision_Pct,Average_Sensitivity_Pct,Average_Specificity_Pct,Average_F1_Pct,Average_MCC_Pct,Balanced_Accuracy_Pct
+DenseNet169,TensorFlow,ImageNet,12500000,25,91.56,91.98,91.56,98.51,91.62,89.76,90.47
+DenseNet201,TensorFlow,ImageNet,18110000,26,89.12,89.35,89.12,98.18,89.11,86.82,91.46
+ResNet50,TensorFlow,ImageNet,23550000,28,89.12,89.69,89.12,98.12,89.19,86.81,88.01
+MobileNetV2,PyTorch,ImageNet,2232839,45,87.01,87.16,87.01,97.55,86.93,84.19,81.83
+VGG16,PyTorch,ImageNet,134289223,44,86.69,86.97,86.69,97.78,86.58,83.76,81.87
+VGG16_MHA,PyTorch,ImageNet,134486984,39,85.39,86.40,85.39,97.82,85.40,82.32,81.46
+InceptionV3,PyTorch,ImageNet,21799911,36,84.74,85.44,84.74,97.50,84.63,81.48,79.64

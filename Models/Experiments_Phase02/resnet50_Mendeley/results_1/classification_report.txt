@@ -1,0 +1,13 @@
+              precision    recall  f1-score   support
+
+    Bacteria       0.98      0.96      0.97       114
+       Fungi       0.82      0.83      0.83       150
+     Healthy       0.69      0.85      0.76        40
+    Nematode       0.87      0.93      0.90        14
+        Pest       0.80      0.77      0.79       122
+ Phytopthora       0.90      0.88      0.89        69
+       Virus       0.92      0.89      0.90       107
+
+    accuracy                           0.86       616
+   macro avg       0.86      0.87      0.86       616
+weighted avg       0.87      0.86      0.86       616
